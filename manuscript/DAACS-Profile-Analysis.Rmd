@@ -1,0 +1,303 @@
+---
+title             : "Academic Success in Online Colleges: The Role of Self-Regulated Learning Profiles"
+shorttitle        : "SRL Profiles"
+author: 
+  - name          : "Timothy J. Cleary"
+    affiliation   : "1"
+    corresponding : yes    # Define only one corresponding author
+    address       : "Postal address"
+    email         : "timothy.cleary@rutgers.edu"
+  - name          : "Jason M. Bryer"
+    affiliation   : "2"
+  - name          : "Elie ChingYen"
+    affiliation   : "3"
+affiliation:
+  - id            : "1"
+    institution   : "Rutgers University"
+  - id            : "2"
+    institution   : "City University of New York"
+  - id            : "3"
+    institution   : "University at Albany"
+authornote: |
+  DAACS was developed under grants #P116F150077 and #R305A210269 from the U.S. Department of Education. However, the contents do not necessarily represent the policy of the U.S. Department of Education, and you should not assume endorsement by the Federal Government.
+abstract: |
+  One or two sentences providing a **basic introduction** to the field,  comprehensible to a scientist in any discipline.
+  Two to three sentences of **more detailed background**, comprehensible  to scientists in related disciplines.
+  One sentence clearly stating the **general problem** being addressed by  this particular study.
+  One sentence summarizing the main result (with the words "**here we show**" or their equivalent).
+  Two or three sentences explaining what the **main result** reveals in direct comparison to what was thought to be the case previously, or how the  main result adds to previous knowledge.
+  One or two sentences to put the results into a more **general context**.
+  Two or three sentences to provide a **broader perspective**, readily comprehensible to a scientist in any discipline.
+keywords          : "self-regulated learning, diagnostic assessments, profile analysis"
+wordcount         : "X"
+bibliography      : ["r-references.bib","references.bib"]
+floatsintext      : yes
+linenumbers       : no
+draft             : no
+mask              : no
+figurelist        : no
+tablelist         : no
+footnotelist      : no
+classoption       : "man"
+output            : papaja::apa6_word
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include = FALSE}
+library("papaja")
+r_refs("r-references.bib")
+
+library(readxl)
+library(ggplot2)
+library(GGally)
+library(magrittr)
+library(reshape2)
+library(psych)
+library(fpc)
+library(cluster)
+library(flexclust)
+library(huxtable)
+
+source('../R/cluster_functions.R')
+source('../R/profile_plot.R')
+
+theme_set(theme_apa())
+
+set.seed(2112)
+
+load('../data/DAACS-WGU-SRL.rda')
+
+cluster_cols <- c('srl_motivation', 'srl_metacognition', 'srl_strategies', 'mathTotal', 'readTotal', 'writeTotal')
+srl_labels <- c(#'FeedbackViews' = 'Feedback Views',
+	'srl_metacognition' = 'Metacognition',
+	'srl_motivation' = 'Motivation',
+	'srl_strategies' = 'Strategies',
+	'readTotal' = 'Reading',
+	'mathTotal' = 'Mathematics',
+	'writeTotal' = 'Writing')
+
+# Data prep
+wgu.srl1_all <- daacs.wgu[complete.cases(daacs.wgu[,cluster_cols]),]
+wgu.srl1 <- wgu.srl1_all[,cluster_cols]
+wgu.srl1 <- wgu.srl1 |> dplyr::mutate_if(is.numeric, scale_this)
+wgu.srl1_all$LogFeedbackViews <- log(wgu.srl1_all$FeedbackViews + 1)
+
+wgu.srl1_all <- wgu.srl1_all |>
+  dplyr::rename(!!!setNames(names(srl_labels), srl_labels))
+
+```
+
+```{r analysis-preferences}
+# Seed for random number generation
+set.seed(42)
+knitr::opts_chunk$set(cache.extra = knitr::rand_seed,
+                      warning = FALSE,
+                      message = FALSE)
+```
+
+
+
+# Methods
+
+
+## Participants
+
+Data for this study were retrieved from a larger randomized control involving 13,196 newly enrolled students in an online school with students from all over the United States (Authors). From that study, half, or 6,536 students, were assigned to the treatment group. Of the students assigned to treatment, `r prettyNum(nrow(wgu.srl1), big.mark = ',')` (`r round(nrow(wgu.srl1) / 6536 * 100, digits = 1)`%) completed all four assessments and are therefore represent the data used for this study.
+
+Students in this study attended an online competency based college. Students enroll in for a six-month term where they are expected to complete a minimum of 12 credits within the six months. Competencies are completed by students at their own pace. They meet regularly with academic mentors (approximately every two weeks) to check on progress. When necessary, students can meet with subject matter experts, otherwise all course work is completed only asynchronously.
+
+
+## Measurements
+
+```{r, echo=FALSE}
+cronbach_srl <- psych::alpha(wgu.srl1[,c('srl_metacognition', 'srl_strategies', 'srl_motivation')])
+```
+
+DAACS assess students in self-regulated learning, reading, writing, and mathematics. The self-regulated learning was developed specifically designed for DAACS and includes 57 questions across metacognition (with subdomains planning, monitoring, and evaluation), motivation (including subdomains self-efficacy, managing test anxiety, mindset, and mastery orientation), and strategies (including subdomains strategies for understanding, help seeking, managing time, and managing environment). Chronbach's alpha [@Cronbach1951] for SRL using the three subscales were `r round(cronbach_srl$total$raw_alpha, digits = 2)`, mathematics with 166 items, for mathematics with six subdomains was 0.64, reading with five subdomains was 0.66, and writing with ten subdomains was 0.75. The six DAACS measures will serve as the independent variables. For simplicity of interpretation, all independent variables will be converted to standard scores.
+
+We analyze how the DAACS measures of college readiness predict two outcomes: feedback views and on-time progress. The DAACS system records all student clicks which serves as a proxy for student engagement with feedback. The feedback views measure removes any pages viewed for completing assessments and therefore capture only the pages which have feedback. Feedback views is positively skewed so will be log transformed before analysis.
+
+All students in this study are considered full-time and expected to complete a minimum of 12 credits within six months. On-time progress is a dichotomous variable which indicates whether a student has successfully completed a minimum of 12 credits within the six-month term.
+
+
+## Data analysis
+
+To provide context for cluster analysis we will first use a variable centered approach. Specifically, regression models will be estimated the two dependent variables, feedback views and on-time progress, on the six DAACS measures using linear and logistic regression, respectively.
+
+Cluster analysis is a statistical procedure that attempts to group observations such they are similar across a number of observations. *k*-means clustering [@Lloyd1982; @MacQueen1967] partitions observations in *k* clusters where each observation belongs to the cluster with the closest mean as measured by the squared-Euclidean distance. The goal is to minimize the variance (of the squared-Euclidean distances) within each cluster. This study will cluster students using the six DAACS measures of student readiness.
+
+Once students have been partitioned into *k* clusters, null hypothesis tests will be conducted to determine if there are statistically significant differences between clusters. ANOVA and chi-squared tests will be used for feedback views and on-time progress, respectively.
+
+
+# Results
+
+
+Table \@ref(tab:regression-table) summarizes the linear and logistic regression models for feedback views and on-time progress, respectively. With the exception of motivation for the on-time progress model, all of the DAACS measures are statistically significant predictors. Of particular note, metacognition and motivation have negative coefficients.
+
+
+```{r regression-table, echo=FALSE}
+fv_out <- lm(LogFeedbackViews ~ Motivation + Metacognition + Strategies + Mathematics + Reading + Writing,
+   data = wgu.srl1_all)
+
+ot_out <- glm(OnTime_Term1 ~ Motivation + Metacognition + Strategies + Mathematics + Reading + Writing,
+   data = wgu.srl1_all,
+   family = binomial(link = 'logit'))
+
+# https://hughjonesd.github.io/huxtable/huxreg.html
+huxreg('Feedback Views' = fv_out,
+       'On Time Progress' = ot_out, 
+       error_pos = "right", 
+       bold_signif = 0.05) |>
+	set_label('tab:regression-table') |>
+	set_caption("Regression results for predicting feedback views and on-time progress from DAACS measures.") 
+```
+
+## Determining desired number of clusters
+
+There are numerous procedures for determining the optimal number of clusters to use. The goal is to find a balance between statistical properties and theory. Figure \@ref(fig:screeplots) provides three common metrics used to determine the optimal number of clusters. The *x*-axis for all of these is the number of clusters and the *y*-axis is the statistic. As described above, *k*-means clustering attempts to minimize within cluster sum of squares of the Euclidean distances. The first plot provides the average within cluster sum of squares for varying number of clusters. When using this plot to determine the number of clusters one must balance minimizing the within sum of squares and over fitting. Typically this is referred to as finding the "elbow." That is, at which point would increasing the number of clusters reduces the withing cluster sum of squares minimally. For the silhouette [@Rousseeuw1987] and Gap [@Tibshirani2001] scores larger values are desired. Based on the methods we examined 3, 5, and 6 cluster solutions^[The online supplemental materials include the results from the three and six cluster solutions.] and concluded that the five cluster solution was optimal in providing a strong theoretical interpretation, reasonable cluster sizes, and justifiable given these statistics.
+
+
+```{r screeplots, echo=FALSE, cache=TRUE, fig.cap="Scree plots to determine optimal number of clusters", fig.width = 13, fig.height = 3.5}
+wgu_gap <- cluster::clusGap(wgu.srl1, kmeans, K.max = 9, B = 60, verbose = interactive()) # NOTE: This takes a while to run
+
+cluster_metrics <- data.frame(
+	k = 1:9,
+	wss = wss(wgu.srl1),
+	silhoutte = silhouette_score(wgu.srl1),
+	gap = wgu_gap$Tab[1:9,'gap'],
+	# calinski_harabasz = calinski_harabasz(wgu.srl1),
+	# davies_bouldin = davies_bouldin(wgu.srl1),
+	stringsAsFactors = FALSE
+)
+
+p_wss <- ggplot(cluster_metrics, aes(x = k, y = wss)) +
+	geom_hline(aes(yintercept = wss), linetype = 2, color = 'grey50') +
+	geom_path() +
+	geom_point() +
+	scale_x_continuous(breaks = 1:9) +
+	xlab('Number of Clusters') +
+	ylab('Within Group Sum of Squares') +
+	theme_minimal()
+
+p_ss <- ggplot(cluster_metrics, aes(x = k, y = silhoutte)) +
+	geom_path() +
+	geom_point() +
+	scale_x_continuous(breaks = 1:9) +
+	xlab('Number of Clusters') +
+	ylab('Silhouette Score') +
+	theme_minimal()
+
+p_gap <- ggplot(cluster_metrics, aes(x = k, y = gap)) +
+	geom_path() +
+	geom_point() +
+	scale_x_continuous(breaks = 1:9) +
+	xlab('Number of Clusters') +
+	ylab('Gap Statistic') +
+	theme_minimal()
+
+cowplot::plot_grid(p_wss + xlab('') + ylab('') + ggtitle('Within Cluster Sum of Squares'),
+				   p_ss + xlab('') + ylab('') + ggtitle('Silhouette Score'),
+				   p_gap + xlab('') + ylab('') + ggtitle('Gap Statistic'),
+				   nrow = 1)
+```
+
+## Cluster Analysis
+
+```{r cluster-analysis, echo=FALSE}
+nClusters <- 5
+set.seed(2112)
+wgu.fit <- kmeans(wgu.srl1, nClusters)
+wgu.srl1_all$cluster <- factor(wgu.fit$cluster, labels = LETTERS[1:nClusters])
+```
+
+*k*-means cluster was estimated using a five cluster solution. The total sum of squares was `r wgu.fit$tot.withinss |> prettyNum(big.mark = ',', digits = 1)` with an average within cluster sum of squares of `r wgu.fit$withinss |> mean() |> prettyNum(big.mark = ',', digits = 1)`. Figure \@ref(fig:cluster-size) provides a bar plot with the cluster sizes. 
+
+```{r cluster-results, echo=FALSE, results='asis', eval=FALSE}
+wgu.fit$centers
+wgu.fit$withinss
+wgu.fit$tot.withinss
+wgu.fit$withinss |> mean()
+factoextra::fviz_cluster(wgu.fit, data = df, geom = 'point') + theme_minimal()
+wgu.srl1_all %>%
+	dplyr::select(cluster, Motivation, Metacognition, Strategies, Mathematics, Reading, Writing) |>
+	dplyr::group_by(cluster) |>
+	dplyr::summarise_all("mean") |>
+	apa_table()
+```
+
+Figure \@ref(fig:cluster-profiles)
+
+
+```{r cluster-size, echo=FALSE, fig.cap='Cluster sizes for a five cluster solution.', fig.width=7, fig.height=2.5}
+tab <- cbind(
+	wgu.srl1_all$cluster |> table() |> as.data.frame(),
+	wgu.srl1_all$cluster |> table() |> prop.table() |> as.data.frame()
+)
+tab <- tab[,-3]
+names(tab) <- c('Cluster', 'n', 'Percent')
+tab$Percent <- paste0(round(tab$Percent * 100, digits = 1), '%')
+ggplot(tab, aes(x = Cluster, y = n, 
+				label = paste0(prettyNum(n, big.mark = ','), ' (', Percent, ')'))) +
+	geom_bar(stat = 'identity', fill = 'grey50') +
+	geom_text(vjust = -0.4, size = 3) +
+	ylab('Cluster Size') +
+	ylim(c(0, 2200))
+```
+
+
+
+```{r cluster-profiles, echo=FALSE, fig.width=11, fig.height=4.5, fig.cap='Cluster profiles (left) with feedback views and on-time success outcome variables (right)'}
+wgu.srl1 <- wgu.srl1 |> dplyr::rename(
+	'Motivation' = 'srl_motivation',
+	'Metacognition' = 'srl_metacognition',
+	'Strategies' = 'srl_strategies',
+	'Mathematics' = 'mathTotal',
+	'Reading' = 'readTotal',
+	'Writing' = 'writeTotal'
+)
+profile_plot(
+	df = wgu.srl1,
+	clusters = wgu.srl1_all$cluster,
+	df_dep = wgu.srl1_all[,c('LogFeedbackViews', 'OnTime_Term1')] |>
+		dplyr::rename('Log Feedback Views' = 'LogFeedbackViews',
+					  'On-Time Progress' = 'OnTime_Term1'),
+	ylab = 'Mean Standard Scale Score',
+	cluster_labels = c("Low SRL / Average Academic",
+					   "Average SRL / Low Academic",
+					   "Low SRL / Low Aacademic",
+					   "Average SRL / High Academic",
+					   "High SRL / Average Academic"),
+	cluster_order = c('Metacognition', 'Motivation', 'Strategies', 'Mathematics', 'Reading', 'Writing')
+)
+```
+
+\@ref(tab:cluster-regression-table)
+
+
+```{r cluster-regression-table, echo=FALSE}
+fv_out <- lm(LogFeedbackViews ~ cluster, data = wgu.srl1_all)
+
+ot_out <- glm(OnTime_Term1 ~ cluster,
+   data = wgu.srl1_all,
+   family = binomial(link = 'logit'))
+
+# https://hughjonesd.github.io/huxtable/huxreg.html
+huxreg('Feedback Views' = fv_out,
+       'On Time Progress' = ot_out, 
+       error_pos = "right", 
+       bold_signif = 0.05) |>
+	set_label('tab:cluster-regression-table') |>
+	set_caption('Regression results for predicting feedback views and on-time progress from clusters.')
+```
+
+
+# Discussion
+
+
+\newpage
+
+# References
+
+::: {#refs custom-style="Bibliography"}
+:::
